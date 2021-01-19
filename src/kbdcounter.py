@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import subprocess
 import time
 from datetime import datetime, timedelta
 from optparse import OptionParser
@@ -13,10 +14,41 @@ class KbdCounter(object):
     def __init__(self, options):
         self.storepath=os.path.expanduser(options.storepath)
 
+        self.muted = False
+        # Pulse capture disbled by default
+        self.mutecommands = ['amixer -D pulse sset Capture']
+        cards = subprocess.check_output("pacmd list-cards | grep 'alsa.card =' | awk '{print $NF}' | tr -d '\"'", shell=True).split('\n')
+        for card in cards:
+            try:
+                controls = subprocess.check_output("amixer -c %s scontrols 2> /dev/null" % card , shell=True)
+            except:
+                controls = False
+            if controls:
+                for control in controls.split("\n"):
+                    if not control:
+                        continue
+                    controlname = control.split("'")[1]
+                    if controlname not in ["Headset", "Capture"]:
+                        continue
+                    print "Added control for %s on card %s" % (controlname, card)
+                    self.mutecommands.append("amixer -c %s sset %s" % (card, controlname))
+                    
+            
         self.set_thishour()
         self.set_nextsave()
         self.read_existing()
 
+    def togglemute(self):
+        if self.muted == True:
+            action = "cap"
+        else:
+            action = "nocap"
+            
+        for command in self.mutecommands:
+            os.system("%s %s 2>&1 > /dev/null" % (command, action))
+
+        return
+    
     def set_thishour(self):
         self.thishour = datetime.now().replace(minute=0, second=0, microsecond=0)
         self.nexthour = self.thishour + timedelta(hours=1)
@@ -56,6 +88,9 @@ class KbdCounter(object):
     def run(self):
         events = XEvents()
         events.start()
+
+        lastkeyat = time.time()
+        
         while not events.listening():
             # Wait for init
             time.sleep(1)
@@ -63,6 +98,11 @@ class KbdCounter(object):
         try:
             while events.listening():
                 evt = events.next_event()
+
+                if time.time() - lastkeyat > 0.75 and self.muted:
+                    self.togglemute()
+                    self.muted = False
+
                 if not evt:
                     time.sleep(0.5)
                     continue
@@ -70,6 +110,12 @@ class KbdCounter(object):
                 if evt.type != "EV_KEY" or evt.value != 1: # Only count key down, not up.
                     continue
 
+                if not self.muted and not "BTN_" in evt.code:
+                    self.togglemute()
+                    self.muted = True
+                    
+                lastkeyat = time.time()
+                    
                 self.thishour_count+=1
             
                 if time.time() > self.nextsave:
@@ -83,23 +129,17 @@ class KbdCounter(object):
             self.save()
 
             
-                    
 
-def run():
+if __name__ == '__main__':
     oparser = OptionParser()
     oparser.add_option("--storepath", dest="storepath",
                        help="Filename into which number of keypresses per hour is written",
-                       default="~/.kbdcounter.csv")
+                       default="~/.kbdcounter.db")
 
     (options, args) = oparser.parse_args()
-    
+
     kc = KbdCounter(options)
     kc.run()
 
-    
-
-    
-
-    
     
     
